@@ -13,46 +13,43 @@ namespace PiSwitcherNET
         PwmPin pin;
         double currPercent = 0.01;
         double prevPercent = 0.01;
+		bool flip = false;
 
         // Called when program starts
         public void Run(IBackgroundTaskInstance taskInstance)
         {
             deferral = taskInstance.GetDeferral();
 
+			// Provide callback for messages
+			StaticListener.MessageReceived += ConnectionReceived;
+
             SetupPWM().Wait();
 
             while (true)
             {
-                // Wait 100s
+                // Wait 60s
                 Task.Delay(60000).Wait();
 
-                // Test what percetange it should be at given the time
-                int hr = DateTime.Now.Hour;
-                int min = DateTime.Now.Minute;
-                // If hour 20 (8pm) and past 30 mins (8:30pm) or if past hour is over 20 (8pm) or if hour is under 7
-                if ((hr == 20 && min >= 30) || hr > 20 || hr < 7)
-                    currPercent = 0.025; // Blinds down
-                else
-                    currPercent = 0.075; // Blinds up
+				currPercent = DetermineActiveDutyCycle();
 
                 // If the percentage has changed from the last update
                 if (currPercent != prevPercent)
-                {
-                    // Start the servo with pwm
-                    pin.SetActiveDutyCyclePercentage(currPercent);
-                    pin.Start();
-
-                    // Update the previous duty cycle
-                    prevPercent = currPercent;
-                    // Wait 1s for servo to turn
-                    Task.Delay(1000).Wait();
-                    // Stop the servo
-                    pin.Stop();
-                }
+					RotateServo();
             }
         }
 
-        private async Task SetupPWM()
+		// Interpret client messages
+		private async void ConnectionReceived(object sender, SocketEventArgs e)
+		{
+			if (e.message == "A7xrev02")
+			{
+				flip = !flip;
+				currPercent = DetermineActiveDutyCycle();
+				RotateServo();
+			}
+		}
+
+		private async Task SetupPWM()
         {
             if (LightningProvider.IsLightningEnabled)
             {
@@ -61,9 +58,44 @@ namespace PiSwitcherNET
                 var pwmController = pwmControllers[1]; // use the on-device controller
                 pwmController.SetDesiredFrequency(50); // try to match 50Hz
                 pin = pwmController.OpenPin(21);
-                //pin.SetActiveDutyCyclePercentage(currPercent);
-                //pin.Start();
             }
         }
+
+		public double DetermineActiveDutyCycle()
+		{
+			// Test what percetange it should be at given the time
+			int hr = DateTime.Now.Hour;
+			int min = DateTime.Now.Minute;
+			if (!flip)
+			{
+				// If hour is over 20 (8pm) or if hour is under 10pm
+				if (hr >= 20 || hr < 10)
+					return 0.025; // Blinds down
+				else
+					return 0.075; // Blinds up
+			}
+			else
+			{
+				// If hour 20 (8pm) and past 30 mins (8:30pm) or if past hour is over 20 (8pm) or if hour is under 10
+				if (hr >= 20 || hr < 10)
+					return 0.075; // Blinds up
+				else
+					return 0.025; // Blinds down
+			}
+		}
+
+		public void RotateServo()
+		{
+			// Start the servo with pwm
+			pin.SetActiveDutyCyclePercentage(currPercent);
+			pin.Start();
+
+			// Update the previous duty cycle
+			prevPercent = currPercent;
+			// Wait 1s for servo to turn
+			Task.Delay(1000).Wait();
+			// Stop the servo
+			pin.Stop();
+		}
     }
 }
